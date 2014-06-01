@@ -1,0 +1,6 @@
+Package: controltheory
+Version: 0-0
+Date: 2014-04-24
+Maintainer: Adam Vogt <vogt.adam@gmail.com>
+Depends: deSolve, polynom, RANN, plyr, reshape2
+License: GPL (>= 2)

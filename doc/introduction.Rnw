@@ -1,0 +1,69 @@
+%\VignetteEngine{knitr::knitr}
+\documentclass[]{article}
+
+\title{controltheory}
+\author{Adam Vogt}
+
+\usepackage{hyperref}
+\usepackage{mathtools}
+
+\begin{document}
+\maketitle
+
+<<cache=F, echo=F>>=
+library(knitr)
+opts_chunk$set(tidy=F, cache=T, autodep=T)
+@
+
+<<>>=
+library(controltheory)
+@
+
+This package helps to treat linear systems in R. Specifically root locus and a
+time domain simulation (using deSolve) are implemented.
+
+Polynomials are represented as vectors, as done in \texttt{base::polyroot} and the \texttt{polynom} package. A shorthand for \texttt{polynom::polynomial} is defined:
+<<>>=
+p( 1, 2, 3 )
+@
+
+\section{Root Locus}
+The root locus of the transfer function:
+\begin{flalign}
+  G_1 = N/D = \frac{\left( 5+s \right)\left( 1 + s \right)}{ s \left( 3 + s \right) \left( 2 + 2s + s^2 \right)}
+  \label{eq:g_ol1}
+\end{flalign}
+shows where the poles of the closed-loop system, $kG_1 / (1+kG_1)$, move as
+$k$ increases from 0. Specifically, the poles are defined by the roots of the
+characteristic polynomial which will be called $\Delta$ ($\Delta = kN + D$).
+Points of interest, such as break-points and asymptotes are calculated
+following \url{http://lpsa.swarthmore.edu/Root_Locus/RootLocusReviewRules.html}
+<<>>=
+r1 <- rlocus( p(5, 1) *p(1, 1), p() * p(3, 1) * p(2, 2, 1),
+             k.expand.f = 2)
+lapply(r1, head, 3)
+@
+
+
+\begin{figure}[h]
+  \begin{center}
+<<>>=
+library(ggplot2)
+plot(ggplot( r1$poles, aes(Re, Im)) +
+    geom_path(aes(group=interaction(pole, stability),
+              col=pole, linetype=stability)) +
+    geom_path(data=r1$asymptotes, linetype=3,
+              aes(group=pole, col=pole)) +
+    geom_point(data=subset(r1$points, type != 'centroid'),
+              aes(shape=type))
+    )
+@
+  \end{center}
+  \caption{Root locus for equation \eqref{eq:g_ol1}}
+  \label{fig:g_ol1}
+\end{figure}
+
+\section{Time domain}
+\texttt{ilt} is provided as an adapter for \texttt{deSolve::radau}.
+
+\end{document}
