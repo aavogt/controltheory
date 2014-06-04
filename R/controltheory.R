@@ -1,4 +1,6 @@
 
+# the same as function(x) unique(sort(x)), except entries that differ
+# by tolerance are considered equal
 uniq.sort.approx <- function(x, tolerance=1e-5) if (length(x) == 0) x else {
   sx <- sort(x)
   for (i in 2:length(sx)) {
@@ -8,6 +10,10 @@ uniq.sort.approx <- function(x, tolerance=1e-5) if (length(x) == 0) x else {
   sx[ ! is.na(sx) ]
 }
 
+# x <- nn2.reorder(a, b)
+# has: sort(x) = seq_along(nrow(a))
+# and minimizes
+#      sum( (a[x, ] - b) ^2 )
 nn2.reorder <- function(a,b) {
     nnab <- nn2( a, b)
     for (j in seq(2, nrow(nnab$nn.idx))) {
@@ -18,32 +24,35 @@ nn2.reorder <- function(a,b) {
     nnab$nn.idx[ , 1]
 }
 
-dropLeadingZeros <- function(x) {
-  zs <- which(x == 0)
-  if (length(zs) == 0) as.numeric(x) else
-    x[ ! which( zs == seq_along(zs)) ]
+
+###################################################
+# utils for polynom::polynomial
+toDescCoefs <- function(x) rev(as.numeric(x))
+
+p <- function(...) if (length(c(...)) == 0) polynomial() else polynomial( c(...) )
+
+###################################################
+# Define a rational object in terms of
+# polyn::polynomial
+rational <- function(num, den = 1) {
+  new('rational', num=as.polynomial(num), den=as.polynomial(den))
 }
 
-toDescCoefs <- function(x)
-    list( polynomial = rev(as.numeric(x)),
-          numeric = rev(x) ) [[class(x)]]
+as.rational <- function(x) UseMethod('as.rational', x)
+as.rational.polynomial <- function(x) rational(x, 1)
+as.rational.numeric <- function(x) rational(as.polynomial(x), 1)
+as.rational.rational <- function(x) x
 
 
-rational <- function(num, den) {
-  r <- list(num=as.polynomial(num), den=as.polynomial(den))
-  class(r) <- 'rational'
-  r
-}
-
-as.rational.polynomial <- function(n) rational(n, 1)
-as.rational.numeric <- function(n) rational(as.polynomial(n), 1)
+round.rational <- function(x, ...)
+  rational( round(x@num, ...), round(x@den, ...))
 
 rationalize <- function(r, tol=1e-7) {
-  nz <- polyroot(r$num)
-  dz <- polyroot(r$den)
+  nz <- polyroot(r@num)
+  dz <- polyroot(r@den)
 
-  if (length(r$num) <= 1 | length(r$den) <= 1) r else {
-    fac <- tail( as.numeric( r$num ), 1) / tail( as.numeric( r$den ), 1)
+  if (length(r@num) <= 1 | length(r@den) <= 1) r else {
+    fac <- tail( as.numeric( r@num ), 1) / tail( as.numeric( r@den ), 1)
 
     for (i in seq_along(nz))
       for (j in seq_along(dz))
@@ -67,14 +76,9 @@ rationalize <- function(r, tol=1e-7) {
   }
 }
 
-`/.rational` <- function(a,b) rational(a$num*b$den, a$den*b$num)
-`+.rational` <- function(a,b) rational(a$num*b$den + b$num*a$den, a$den * b$den) 
-`-.rational` <- function(a,b) rational(a$num*b$den - b$num*a$den, a$den * b$den) 
-`*.rational` <- function(a,b) rational(a$num*b$num, a$den*b$den)
-
 print.rational <- function(x, oneLine = F, ...) {
-  n <- as.character(x$num)
-  d <- as.character(x$den)
+  n <- as.character(x@num)
+  d <- as.character(x@den)
   invisible(cat(
     if (oneLine) paste(n, '/', d)
     else {
@@ -83,17 +87,67 @@ print.rational <- function(x, oneLine = F, ...) {
     }, '\n'))
 }
 
-where.pos <- function(a) {
-  a <- rationalize(a)
-  n <- polyroot(a$num)
-  d <- polyroot(a$den)
+rationalOps <- list(
+      '*' = function(a,b) rational(a@num*b@num, a@den*b@den),
+      '/' = function(a,b) rational(a@num*b@den, a@den*b@num),
+      '+' = function(a,b) rational(a@num*b@den + b@num*a@den, a@den * b@den),
+      '-' = function(a,b) rational(a@num*b@den - b@num*a@den, a@den * b@den),
+      # quite possibly this should be defined separately for integer b only
+      '^' = function(a,b) if ( length(b@den) == 1 & length(b@num) == 1 ) {
+                        pow <- b@num[1] / b@num[1]
+                        rational(a@num^pow, a@den^pow)
+      } else stop('unsupported exponent for rational:', b)
+      )
+      # ^, unary -, %%
+
+# evaluates a ratio of polynomials a/b at x
+lhopitalRat <- function(x, tf) {
+  a <- tf@num
+  b <- tf@den
+  result <- NaN
+  if (is.infinite(x)) {
+    xSign <- if (x > 0) 1
+      else switch( (length(a) + length(b)) %% 2,
+                  `0` = 1, `1` = -1)
+    leadingCoef <- tail(a, 1) / tail(b, 1)
+    result <- switch( as.character(sign(length(a) - length(b))),
+           `0` = leadingCoef * xSign,
+           `1` = Inf * leadingCoef * xSign,
+           `-1` = 0)
+  } else {
+  while (length(b) > 0) {
+    va <- as.function(a)(x)
+    vb <- as.function(b)(x)
+    if ( (va == 0 & vb == 0) ) {
+      a <- deriv(a)
+      b <- deriv(b)
+    } else {
+      result <- va/vb
+      break
+    }
+  }}
+  result
+}
+
+as.function.rational <- function(x, limit=F) {
+  if (limit) function(v) lhopitalRat(v, x)
+    else function(v) as.function(x@num)(v) / as.function(x@den)(v)
+}
+
+
+###################################################
+# handling signs of rational functions on intervals
+signIntervals <- function( rat ) {
+  rat <- rationalize(rat)
+  n <- polyroot(rat@num)
+  d <- polyroot(rat@den)
   v <- rle( sort( c(Inf, -Inf, n, d) ) )
   v <- Re( v$values[ v$lengths %% 2 == 1 & (abs(Im(v$values)) < 1e-10) ] )
   ppV <- levels( cut( 0, v ) )
 
   # one negative when we have an odd degree (x^3, x^5  ...)
   # one negative for each negative coefficient on the highest power
-  negInfSign <- sign(prod(sapply( a[ c('num', 'den') ], function(x)
+  negInfSign <- sign(prod(sapply( list(rat@num, rat@den), function(x)
                             tail(x, 1) * # coef
                             (0.5 - (length(x) %% 2 == 1)) # degree
                             )))
@@ -103,14 +157,15 @@ where.pos <- function(a) {
       sign = rep( negInfSign *c(1, -1), length.out=length(ppV)),
       stringsAsFactors = F),
     dat = v,
-    signExtreme = tail(a$num, 1),
-    term = a)
+    signExtreme = tail(rat@num, 1),
+    term = rat)
 
 }
 
-where.pos.all <- function(a) {
-  pts <- mdply( 1:length(a), function(i) {
-               data.frame(p=head(a[[i]]$dat, -1), sign = a[[i]]$pp$sign)
+combineSignIntervals <- function( intervals ) {
+  pts <- mdply( 1:length(intervals), function(i) {
+               data.frame(p = head(intervals[[i]]$dat, -1),
+                          sign = intervals[[i]]$pp$sign)
     })
   ps <- unique(sort(pts$p))
   pts <- ddply( pts, .(X1), function(x)
@@ -129,9 +184,13 @@ where.pos.all <- function(a) {
         cuts = cuts)
 }
 
-routh_array <- function(num, den) {
-  den <- toDescCoefs(den)
-  num <- toDescCoefs(num)
+###################################################
+# given N(s)/D(s), return the first column of the
+# Routh array for kN + D, where those polynomials
+# are functions of k.
+routh_array <- function(oltf) {
+  den <- toDescCoefs(oltf@den)
+  num <- toDescCoefs(oltf@num)
 
   lenMax <- max( length(den),  length(num))
 
@@ -155,7 +214,7 @@ routh_array <- function(num, den) {
   m <- function(i,j) if (j > nc) 0 else M[[i, j]]
 
   addEntry <- function(i,j) {
-    M[[i,j]] <<-  if (!isTRUE( all.equal( m(i-1, j)$num, 0 ) ))
+    M[[i,j]] <<-  if (!isTRUE( all.equal( m(i-1, j)@num, 0 ) ))
           m(i-2, j+1) - m(i-2, j)*m(i-1, j+1)/m(i-1, j)
       else { warning('addEntry'); 0 }
   }
@@ -171,13 +230,35 @@ routh_array <- function(num, den) {
 
 }
 
-stable.intervals <- function(num, den)
-  where.pos.all( lapply( routh_array( num, den ), where.pos) )
+###################################################
+# finding f(t) given F(s)
+defaultRoots <- function(tf, settledRtol=c(0.01, 0.02, 0.05), tMin = 0.1) {
+    y.inf <- finalValue(tf)
+    y.init <- initialValue(tf)
+    dy.1.inf <- finalValue(tf*p())
+    settledAtol <- settledRtol * (y.inf - y.init)
 
-ilt <- function(num, den, ...) {
+    mkAtolPair <-  function(d)
+      list(   y = list(exclude = function(t, y, ...) t < tMin,
+                        final = y.inf + d),
+              y = list(exclude = function(t, ...) t < tMin,
+                        final = y.inf - d))
 
-  num <- toDescCoefs(num)
-  den <- toDescCoefs(den)
+    r <- c(list(dy.1 = list(exclude = function(t, y, ...) t < tMin
+                                            | (y - y.inf) / (y.inf - y.init) < 0.1,
+                      final = dy.1.inf)),
+         do.call(c, lapply( settledAtol, mkAtolPair)))
+
+    attr(r, 'settledRtol') <- settledRtol
+    attr(r, 'tMin') <- tMin
+    r
+}
+
+
+ilt <- function( tf, roots = defaultRoots(tf), ...) {
+
+  num <- toDescCoefs(tf@num)
+  den <- toDescCoefs(tf@den)
 
   makeMass <- function(ps) {
     m <- diag(length(ps)-1)
@@ -197,33 +278,68 @@ ilt <- function(num, den, ...) {
         list( c( - tail(den, 1) * y[length(den)-1] / den[1],
                   head(y, -1) ))
 
+  yNames <- if (length(y0) > 1)
+            c( paste0('dy.', seq(length(y0)-1, 1)), 'y')
+      else  'y'
+
+  rootfunc <- function(t,y,p) {
+
+    tyNamed <- vector('list', length(y)+1)
+    tyNamed[1] <- t
+    tyNamed[2:length(tyNamed)] <- y
+    names(tyNamed[2:length(tyNamed)]) <- yNames
+    names(tyNamed[1]) <- 't'
+
+    mapply( function(r, i) {
+                if (do.call(r$exclude, tyNamed)) sign(y[i] - r$final) * 10
+                  else y[i] - r$final
+            }, roots, match(names(roots), yNames))
+  }
+
+
   r <- radau(y = y0,
         mass = M,
         func = func,
-        rootfunc = function(t,y,p) if (tail(y, 1) > 0.1) tail(y, 2)[1] else 1,
+        rootfunc = rootfunc,
         events = list(root=T, terminalroot = F),
         ...)
 
-  colnames(r)[length(colnames(r))] <- 'y'
-  colnames(r)[ 2 : (ncol(r)-1) ] <- paste0('dy.', seq(ncol(r)-2, 1, by=-1))
+  colnames(r)[ 2 : length(colnames(r))] <- yNames
+  attr(r ,'tf') <- tf
+  attr(r, 'roots') <- roots
   r
 }
 
-# evaluates a ratio of polynomials a/b at x
-lhopitalRat <- function(x, a, b) {
-  result <- NaN
-  while (length(b) > 0) {
-    va <- as.function(a)(x)
-    vb <- as.function(b)(x)
-    if (va != 0 & vb != 0) {
-      result <- va/vb
-      break
-    }
-  }
-  result
+settlingTimes <- function(x) {
+  # good indexes
+  yRoots <- names(attr(x, 'roots')) %in% 'y'
+  if (sum(yRoots) %% 2 != 0)
+    stop("don't know what to do with an odd number of y-roots")
+  iix <- ceiling(cumsum(yRoots)/2)
+  yEnd <- x[nrow(x), ncol(x)]
+
+  # probably pretty fragile
+  ldply( seq(sum(yRoots) / 2), function(i) {
+         yU <- attr(x, 'roots')[ iix == i ][[1]]$final
+         yL <- attr(x, 'roots')[ iix == i ][[2]]$final
+         data.frame( yU=yU, yL=yL,
+               t = if ( yEnd < yU & yEnd > yL )
+                    tail(attr(x, 'troot')[ attr(x, 'indroot')
+                              %in% which(iix == i) ], 1)
+                  else NA
+              )
+      })
 }
 
-rlocus <- function(num, den,
+
+finalValue <- function(tf) as.function(tf * p(), limit=T)(0)
+
+initialValue <- function(tf) as.function(tf*p(), limit=T)(Inf)
+
+
+###################################################
+# root locus
+rlocus <- function(oltf,
                    eps.im = 1e-8,
                    eps.re = -1e-8,
                    k.def.max = 10,
@@ -232,13 +348,13 @@ rlocus <- function(num, den,
                    ks.override = NULL,
                    isosamples.pole = 20,
                    isosamples.asymptote = 10) {
-  num <- polynomial(num)
-  den <- polynomial(den)
+  num <- oltf@num
+  den <- oltf@den
 
   breakOut <- deriv(num) * den - num * deriv(den)
   breakOuts <- polyroot(breakOut)
   breakOuts <- do.call('rbind', lapply( breakOuts, function(s)
-    data.frame(s=s, k= - as.vector(lhopitalRat(s, den, num)))
+    data.frame(s=s, k= - as.vector(lhopitalRat(s, rational(den, num))))
     ))
   breakOuts <- subset(breakOuts, abs(Im(k)) < eps.im & Re(k) > 0 & Im(s) < eps.im)
   dsdk <- function(k, y, parms) {
@@ -251,7 +367,9 @@ rlocus <- function(num, den,
   }
   poles <- polyroot(den)
 
-  ks.stable <- stable.intervals( num, den )
+
+  ks.stable <-
+    combineSignIntervals( lapply( routh_array( oltf ), signIntervals) )
   
   ks <- if (!is.null(ks.override)) ks.override else
     sort( c( k.def.max, Re(breakOuts$k),
@@ -373,5 +491,3 @@ rlocus <- function(num, den,
         ks.stable = ks.stable)
 
 }
-
-p <- function(...) if (length(c(...)) == 0) polynomial() else polynomial( c(...) )

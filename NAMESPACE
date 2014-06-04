@@ -1,1 +1,11 @@
-export(ilt, rlocus, p)
+export(ilt, settlingTimes, defaultRoots, rlocus)
+export(p, finalValue, initialValue) 
+
+export(rational, as.rational, rationalize)
+S3method(round, rational)
+S3method(print, rational)
+S3method(as.function, rational)
+
+S3method(as.rational, polynomial)
+S3method(as.rational, numeric)
+S3method(as.rational, rational)

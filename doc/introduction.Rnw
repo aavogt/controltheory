@@ -6,23 +6,30 @@
 
 \usepackage{hyperref}
 \usepackage{mathtools}
+\usepackage[section]{placeins}
 
 \begin{document}
 \maketitle
 
+\listoffigures
+
 <<cache=F, echo=F>>=
 library(knitr)
-opts_chunk$set(tidy=F, cache=T, autodep=T)
+opts_chunk$set(tidy=F, cache=T, autodep=T, fig.height=3)
+knit_hooks$set(crop=hook_pdfcrop)
 @
-
 <<>>=
 library(controltheory)
 @
 
-This package helps to treat linear systems in R. Specifically root locus and a
-time domain simulation (using deSolve) are implemented.
 
-Polynomials are represented as vectors, as done in \texttt{base::polyroot} and the \texttt{polynom} package. A shorthand for \texttt{polynom::polynomial} is defined:
+This package helps to treat linear systems in R. Specifically
+root locus and a time domain simulation (using deSolve) are
+implemented.
+
+Polynomials are represented as vectors, as done in
+\texttt{base::polyroot} and the \texttt{polynom} package. A
+shorthand for \texttt{polynom::polynomial} is defined:
 <<>>=
 p( 1, 2, 3 )
 @
@@ -33,21 +40,26 @@ The root locus of the transfer function:
   G_1 = N/D = \frac{\left( 5+s \right)\left( 1 + s \right)}{ s \left( 3 + s \right) \left( 2 + 2s + s^2 \right)}
   \label{eq:g_ol1}
 \end{flalign}
-shows where the poles of the closed-loop system, $kG_1 / (1+kG_1)$, move as
-$k$ increases from 0. Specifically, the poles are defined by the roots of the
-characteristic polynomial which will be called $\Delta$ ($\Delta = kN + D$).
-Points of interest, such as break-points and asymptotes are calculated
-following \url{http://lpsa.swarthmore.edu/Root_Locus/RootLocusReviewRules.html}
+shows where the poles of the closed-loop system, $kG_1 /
+(1+kG_1)$, move as $k$ increases from 0. Specifically, the poles
+are defined by the roots of the characteristic polynomial which
+will be called $\Delta$ ($\Delta = kN + D$).  Points of interest,
+such as break-points, asymptotes and intervals in which $k$ leads
+to a stable system are calculated following
+\url{http://lpsa.swarthmore.edu/Root_Locus/RootLocusReviewRules.html}
 <<>>=
-r1 <- rlocus( p(5, 1) *p(1, 1), p() * p(3, 1) * p(2, 2, 1),
-             k.expand.f = 2)
+eq1 <- rational( p(5, 1) *p(1, 1), p() * p(3, 1) * p(2, 2, 1))
+print(eq1)
+
+
+r1 <- rlocus(eq1, k.expand.f = 2)
 lapply(r1, head, 3)
 @
 
 
 \begin{figure}[h]
   \begin{center}
-<<>>=
+<<fig.height=4>>=
 library(ggplot2)
 plot(ggplot( r1$poles, aes(Re, Im)) +
     geom_path(aes(group=interaction(pole, stability),
@@ -64,6 +76,140 @@ plot(ggplot( r1$poles, aes(Re, Im)) +
 \end{figure}
 
 \section{Time domain}
-\texttt{ilt} is provided as an adapter for \texttt{deSolve::radau}.
+\texttt{ilt} is provided as an adapter for
+\texttt{deSolve::radau}.  It numerically calculates an inverse
+laplace transform, at least if the provided transfer function is
+a ratio of polynomials.
+
+\subsection{Sin}
+As an example,
+here is $\mathcal{L}^{-1} 1 / (1 + s^2) = \sin(t)$
+
+<<>>=
+library(controltheory)
+sint <- ilt( rational( 1, c(1, 0, 1)), times = seq(0, pi, by=0.3) )
+unclass(sint)
+@
+The result comes from \texttt{deSolve::radau}. Derivatives of the
+output $y$ that were needed to calculate the response are
+included with names \texttt{dy.1}, \texttt{dy.2} for the first
+and second derivatives. Additionally zeroes of the first
+derivative are included in the attributes \texttt{valroot} and
+\texttt{troot}.
+
+<<>>=
+plot(sint)
+@
+
+
+
+\subsection{A more complicated transfer function}
+For the next example, the closed-loop step response for the
+system given by equation \eqref{eq:g_ol1} is found.
+
+First define the open-loop transfer function
+<<>>=
+library(controltheory)
+(gOL <- rational( p(5,1)*p(1,1),
+                  p(0, 1) * p(3, 1) * p(2, 2, 1)))
+
+gCL <- function(k) k*gOL / (1 + k*gOL)
+gCL(1)
+
+@
+
+The above transfer function could be simplified by dividing
+through by $x$. The other common factors could be found by
+manually finding the the poles and zeroes:
+<<>>=
+polyroot(gCL(1)@den)
+polyroot(gCL(1)@num)
+@
+and then making a new transfer function without the factors $0$ $-1+i$
+and $-1-i$ from the numerator and denominator.
+
+Alternatively, this process is automated with \texttt{rationalize}:
+<<>>=
+rationalize(gCL(1))
+
+round( rationalize(gCL(1)), digits=10)
+@
+
+
+<<>>=
+library(doMC)
+registerDoMC(2)
+mkStepResponses <- function(ks, ...) mlply( data.frame(k = ks),
+  function(k)
+      ilt(rationalize( gCL(k) / p() ),
+          ...),
+    .parallel=T)
+@
+
+\begin{figure}[h]
+  \begin{center}
+<<>>=
+library(ggplot2)
+plot( ggplot( ldply(mkStepResponses(c(1,5,10),
+                                    times=seq(0, 20, length.out=400)),
+                     identity),
+             aes(time, y, col=factor(k)))
+    + geom_path())
+@
+  \end{center}
+  \caption{Step responses for the system in equation \ref{eq:g_ol1} with different proportional gains $k$}
+  \label{fig:yOfT}
+\end{figure}
+
+
+
+
+<<>>=
+responsesK <- mkStepResponses(seq(1, 8, length.out=20),
+                      times = seq(0, 100, length.out=100))
+@
+<<>>=
+responsesK.stationary <- ldply(responsesK,
+      function(x) {
+        ix <- attr(x, 'indroot') == 1
+        data.frame(t=attr(x, 'troot')[ix],
+                   n=seq_along(attr(x, 'troot')[ix]),
+                   y=attr(x, 'valroot')[ ncol(x)-1,ix])
+      })
+responsesK.settling <- within(ldply(responsesK, settlingTimes), {
+                              yU <- round(yU, digits=3)
+                              yL <- round(yL, digits=3) })
+@
+
+\begin{figure}[h]
+  \begin{center}
+<<>>=
+library(directlabels)
+plot( ggplot(subset(responsesK.stationary, n<13), aes(k, y))
+     + geom_line(aes(col=factor(n)))
+     + geom_dl(aes(col=factor(n),
+                    label=n),
+                method='last.bumpup')
+     + scale_color_discrete(guide='none'))
+@
+  \end{center}
+  \caption{The peaks in figure \ref{fig:yOfT} increase in
+  amplitude as $k$ increases.}
+  \label{fig:yPeak}
+\end{figure}
+
+\begin{figure}[h]
+  \begin{center}
+<<fig.height=3>>=
+plot( ggplot(responsesK.settling,
+             aes(k , t, col=factor(yU)))
+     + geom_line()
+     + ylab('settling time'))
+@
+  \end{center}
+  \caption{Settling times}
+  \label{fig:settling}
+\end{figure}
 
 \end{document}
+
